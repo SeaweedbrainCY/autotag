@@ -1,0 +1,97 @@
+#!/bin/bash
+
+set -e
+
+# Functions
+get_latest_tag() {
+  git fetch --tags > /dev/null 2>&1
+  git tag --sort=-creatordate | head -n 1
+}
+
+bump_version() {
+  IFS='.' read -r major minor patch <<< "${1#v}"
+  case "$2" in
+    major) major=$((major + 1)); minor=0; patch=0 ;;
+    minor) minor=$((minor + 1)); patch=0 ;;
+    fix) patch=$((patch + 1)) ;;
+  esac
+  echo "v$major.$minor.$patch"
+}
+
+get_next_dev_tag() {
+  base="$1"
+  last_dev=$(git tag --list "$base-dev.*" --sort=-creatordate | head -n 1)
+  if [[ $last_dev =~ -dev\.([0-9]+) ]]; then
+    devnum=$((BASH_REMATCH[1] + 1))
+  else
+    devnum=1
+  fi
+  echo "$base-dev.$devnum"
+}
+
+# Defaults
+manual_tag=""
+bump_type=""
+is_dev=0
+message=""
+
+# Parse options
+while [[ $# -gt 0 ]]; do
+  case "$1" in
+    -c)
+      manual_tag="$2"
+      shift 2 ;;
+    -major|-minor|-fix)
+      bump_type="${1#-}"
+      shift ;;
+    -dev)
+      is_dev=1
+      shift ;;
+    -m)
+      message="$2"
+      shift 2 ;;
+    *)
+      echo "Unknown option: $1"
+      exit 1 ;;
+  esac
+done
+
+# Determine tag
+if [[ -n $manual_tag ]]; then
+  tag="$manual_tag"
+else
+  latest_tag=$(get_latest_tag)
+  [[ -z $latest_tag ]] && latest_tag="v0.0.0"
+  clean_tag="${latest_tag%%-dev.*}"
+
+  base_tag=$(bump_version "$clean_tag" "$bump_type")
+  if [[ $is_dev -eq 1 ]]; then
+    tag=$(get_next_dev_tag "$base_tag")
+  else
+    tag="$base_tag"
+  fi
+fi
+
+# Determine message
+if [[ -z $message ]]; then
+  last_msg=$(git log -1 --pretty=%B)
+  echo "Use last commit message? ($last_msg)"
+  read -p "Enter tag message (default = last commit message): " input_msg
+  message="${input_msg:-$last_msg}"
+fi
+
+# Confirm
+echo "About to create and push tag:"
+echo "  Tag: $tag"
+echo "  Message: $message"
+read -p "Continue? (y/N): " confirm
+if [[ $confirm != [yY] ]]; then
+  echo "Aborted."
+  exit 1
+fi
+
+# Tag and push
+git tag -a "$tag" -m "$message"
+git push origin "$tag"
+
+echo "Tag $tag created and pushed!"
